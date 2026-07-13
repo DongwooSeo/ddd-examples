@@ -402,58 +402,55 @@ public class OrderService {
 #### ✅ After: Anti-Corruption Layer (Port + Adapter)
 
 ```java
-// ✅ 애플리케이션 계층: 아웃바운드 포트(인터페이스)
+// 애플리케이션 계층: 아웃바운드 포트(인터페이스)
 public interface ProductPort {
     Optional<ProductInfo> getProduct(ProductId productId);
     boolean decreaseStock(ProductId productId, int quantity);
 }
 
-// ✅ 인프라 계층: 포트를 구현하는 HTTP 어댑터
+// 인프라 계층: RestClient로 상품 서비스를 호출하는 어댑터
 @Component
-public class ProductHttpClient implements ProductPort {
+public class ProductRestClient implements ProductPort {
 
-    /**
-     * 실제 환경에서는:
-     * return webClient.get()
-     *     .uri("/products/{id}", productId.getId())
-     *     .retrieve()
-     *     .bodyToMono(ProductInfo.class)
-     *     .blockOptional();
-     */
+    private final RestClient restClient;
+
+    public ProductRestClient(RestClient.Builder builder,
+                             @Value("${external.product.base-url}") String baseUrl) {
+        this.restClient = builder.baseUrl(baseUrl).build();
+    }
+
     @Override
     public Optional<ProductInfo> getProduct(ProductId productId) {
-        log.info("[External API] 상품 조회: productId={}", productId.getId());
+        ProductResponse response = restClient.get()
+                .uri("/products/{id}", productId.getId())
+                .retrieve()
+                .body(ProductResponse.class);
 
-        // Mock 데이터 (예시용)
-        return Optional.of(new ProductInfo(
-            productId,
-            "샘플 상품 " + productId.getId(),
-            10000L,
-            100,
-            true
-        ));
+        return Optional.ofNullable(response).map(this::toProductInfo);
     }
 
     @Override
     public boolean decreaseStock(ProductId productId, int quantity) {
-        log.info("[External API] 재고 차감: productId={}, quantity={}",
-                 productId.getId(), quantity);
+        restClient.post()
+                .uri("/products/{id}/stock/decrease", productId.getId())
+                .body(Map.of("quantity", quantity))
+                .retrieve()
+                .toBodilessEntity();
         return true;
     }
 }
 
-// ✅ 서비스에서 사용 (인터페이스에만 의존)
+// 서비스에서 사용 (인터페이스에만 의존)
 @Service
 public class OrderApplicationService {
 
-    private final ProductPort productPort;  // ✅ Port 사용
+    private final ProductPort productPort;
 
     private OrderItem createOrderItemFromExternalProduct(OrderItemRequest request) {
-        // ✅ 외부 도메인에서 정보 조회
         ProductPort.ProductInfo product = productPort.getProduct(ProductId.of(request.productId()))
             .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다"));
 
-        // ✅ 외부 모델을 내부 도메인 객체로 변환
+        // 외부 모델을 주문 도메인 객체로 변환
         return new OrderItem(
             product.productId(),
             product.productName(),
@@ -482,9 +479,9 @@ public class OrderApplicationService {
 │  └────────────────────────────────┘     │
 │                                          │
 │  외부 통신 (Port → HTTP Adapter):         │
-│  ├─ ProductPort   → ProductHttpClient   │
-│  ├─ CustomerPort  → CustomerHttpClient  │
-│  └─ CouponPort    → CouponHttpClient    │
+│  ├─ ProductPort   → ProductRestClient   │
+│  ├─ CustomerPort  → CustomerRestClient  │
+│  └─ CouponPort    → CouponRestClient    │
 └─────────────────────────────────────────┘
          │ HTTP/gRPC
          ├────────────────────────────────┐

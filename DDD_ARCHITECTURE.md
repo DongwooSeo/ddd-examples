@@ -29,6 +29,7 @@
 
 외부 도메인과 통신할 때 **포트(Port) 인터페이스와 인프라 어댑터**를 사용하여:
 - 애플리케이션 계층에는 포트(인터페이스)만 두고, 인프라 계층에서 어댑터로 구현
+- 할인 계산 같은 외부 도메인의 규칙은 그 도메인이 갖고, 어댑터는 호출과 응답 변환만 담당
 - 주문 도메인을 외부 변경으로부터 보호
 - 외부 도메인의 DTO를 주문 도메인 객체로 변환
 - 마이크로서비스 아키텍처에서의 도메인 간 통신 패턴
@@ -40,7 +41,7 @@ private ProductRepository productRepository; // 다른 도메인의 Repository
 
 // ✅ Port(인터페이스)로 다른 도메인 접근 (올바른 예)
 @Autowired
-private ProductPort productPort; // Anti-Corruption Layer (인프라의 HTTP 어댑터가 구현)
+private ProductPort productPort; // Anti-Corruption Layer (인프라의 RestClient 어댑터가 구현)
 ```
 
 ## 📁 프로젝트 구조
@@ -85,13 +86,16 @@ src/main/java/com/growmighty/examples/ddd/after/
 │
 └── infrastructure/                        # 인프라 레이어
     └── external/                          # 외부 도메인 통신 (포트 어댑터)
-        ├── ProductHttpClient.java         # ProductPort HTTP 어댑터
-        ├── CustomerHttpClient.java        # CustomerPort HTTP 어댑터
-        ├── CouponHttpClient.java          # CouponPort HTTP 어댑터
-        └── dto/                           # 외부 도메인 DTO
-            ├── ProductDTO.java
-            ├── CustomerDTO.java
-            └── CouponDTO.java
+        ├── ProductRestClient.java         # ProductPort RestClient 어댑터
+        ├── CustomerRestClient.java        # CustomerPort RestClient 어댑터
+        ├── CouponRestClient.java          # CouponPort RestClient 어댑터
+        └── dto/                           # 외부 서비스 요청/응답 DTO
+            ├── ProductResponse.java
+            ├── StockChangeRequest.java
+            ├── CustomerResponse.java
+            ├── CouponDiscountRequest.java
+            ├── CouponDiscountResponse.java
+            └── CouponUseRequest.java
 ```
 
 ## 🔑 핵심 DDD 패턴
@@ -151,7 +155,7 @@ public class OrderPaidEvent extends OrderDomainEvent {
 // 주문 도메인의 영속성만 담당
 public interface OrderRepository extends JpaRepository<Order, Long> {
     // 주문 도메인 자체의 조회만 담당
-    // 다른 도메인 조회는 Port(인터페이스) + HTTP 어댑터 사용
+    // 다른 도메인 조회는 Port(인터페이스) + RestClient 어댑터 사용
 }
 ```
 
@@ -163,21 +167,25 @@ public interface ProductPort {
     Optional<ProductInfo> getProduct(ProductId productId);
 }
 
-// 인프라 계층: 외부 도메인과의 통신을 캡슐화한 어댑터
+// 인프라 계층: RestClient로 상품 서비스를 호출하는 어댑터
 @Component
-public class ProductHttpClient implements ProductPort {
+public class ProductRestClient implements ProductPort {
+
+    private final RestClient restClient;
+
+    public ProductRestClient(RestClient.Builder builder,
+                             @Value("${external.product.base-url}") String baseUrl) {
+        this.restClient = builder.baseUrl(baseUrl).build();
+    }
 
     @Override
     public Optional<ProductInfo> getProduct(ProductId productId) {
-        // 실제 환경에서는 WebClient로 HTTP 호출
-        // return webClient.get()
-        //     .uri("/products/{id}", productId.getId())
-        //     .retrieve()
-        //     .bodyToMono(ProductInfo.class)
-        //     .blockOptional();
+        ProductResponse response = restClient.get()
+                .uri("/products/{id}", productId.getId())
+                .retrieve()
+                .body(ProductResponse.class);
 
-        // 예시: Mock 데이터 반환
-        return Optional.of(new ProductInfo(...));
+        return Optional.ofNullable(response).map(this::toProductInfo);
     }
 }
 ```
@@ -278,7 +286,7 @@ public class OrderApplicationService {
 ### 1. 외부 도메인과의 통신
 
 - ❌ **Repository 사용**: 다른 도메인의 데이터에 직접 접근
-- ✅ **Port + HTTP 어댑터 사용**: Anti-Corruption Layer를 통한 통신 (애플리케이션은 포트에만 의존)
+- ✅ **Port + RestClient 어댑터 사용**: Anti-Corruption Layer를 통한 통신 (애플리케이션은 포트에만 의존)
 
 ### 2. DTO vs Entity
 

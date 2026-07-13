@@ -18,7 +18,7 @@
 1. **빈약한 도메인 모델의 문제점** 이해
 2. **DDD 핵심 패턴** 실전 적용
 3. **Bounded Context**와 **Anti-Corruption Layer** 이해
-4. **외부 도메인과의 통신** 방법 (WebClient)
+4. **외부 도메인과의 통신** 방법 (RestClient)
 5. **도메인 이벤트**를 활용한 느슨한 결합
 
 ## 📁 프로젝트 구조
@@ -74,13 +74,16 @@ ddd-examples/
     │
     └── infrastructure/            # 인프라 레이어
         └── external/              # 외부 도메인 통신 (포트 어댑터)
-            ├── CouponHttpClient.java         # CouponPort HTTP 어댑터
-            ├── CustomerHttpClient.java       # CustomerPort HTTP 어댑터
-            ├── ProductHttpClient.java        # ProductPort HTTP 어댑터
-            └── dto/               # 외부 도메인 DTO
-                ├── ProductDTO.java
-                ├── CustomerDTO.java
-                └── CouponDTO.java
+            ├── CouponRestClient.java         # CouponPort RestClient 어댑터
+            ├── CustomerRestClient.java       # CustomerPort RestClient 어댑터
+            ├── ProductRestClient.java        # ProductPort RestClient 어댑터
+            └── dto/               # 외부 서비스 요청/응답 DTO
+                ├── ProductResponse.java
+                ├── StockChangeRequest.java
+                ├── CustomerResponse.java
+                ├── CouponDiscountRequest.java
+                ├── CouponDiscountResponse.java
+                └── CouponUseRequest.java
 ```
 
 ## 🔑 핵심 DDD 패턴
@@ -125,14 +128,15 @@ public interface ProductPort {
     Optional<ProductInfo> getProduct(ProductId productId);
 }
 
-// 인프라 계층: 외부 도메인과의 통신을 캡슐화한 HTTP 어댑터
+// 인프라 계층: RestClient로 상품 서비스를 호출하는 어댑터
 @Component
-public class ProductHttpClient implements ProductPort {
+public class ProductRestClient implements ProductPort {
+
+    private final RestClient restClient;
 
     @Override
     public Optional<ProductInfo> getProduct(ProductId productId) {
-        // WebClient로 외부 서비스 호출
-        // 주문 도메인을 외부 변경으로부터 보호
+        // 상품 서비스에 요청해서 받은 응답을 주문 도메인 모델로 옮겨 담는다.
         return /* 외부 API 호출 결과 */;
     }
 }
@@ -270,6 +274,7 @@ public class GlobalExceptionHandler {
 
 외부 도메인과 통신할 때 **포트(Port) 인터페이스와 인프라 어댑터**를 사용하여:
 - 애플리케이션 계층에는 포트(인터페이스)만 두고, 인프라 계층에서 어댑터로 구현
+- 할인 계산 같은 외부 도메인의 규칙은 그 도메인이 갖고, 어댑터는 호출과 응답 변환만 담당
 - 주문 도메인을 외부 변경으로부터 보호
 - 외부 도메인의 DTO를 주문 도메인 객체로 변환
 - 마이크로서비스 아키텍처에서의 도메인 간 통신 패턴
@@ -281,7 +286,7 @@ private ProductRepository productRepository; // 다른 도메인의 Repository
 
 // ✅ Port(인터페이스)로 다른 도메인 접근 (올바른 예)
 @Autowired
-private ProductPort productPort; // Anti-Corruption Layer (인프라의 HTTP 어댑터가 구현)
+private ProductPort productPort; // Anti-Corruption Layer (인프라의 RestClient 어댑터가 구현)
 ```
 
 ### 주문 프로세스 흐름
@@ -567,58 +572,55 @@ public class OrderService {
 #### ✅ After: Anti-Corruption Layer (Port + Adapter)
 
 ```java
-// ✅ 애플리케이션 계층: 아웃바운드 포트(인터페이스)
+// 애플리케이션 계층: 아웃바운드 포트(인터페이스)
 public interface ProductPort {
     Optional<ProductInfo> getProduct(ProductId productId);
     boolean decreaseStock(ProductId productId, int quantity);
 }
 
-// ✅ 인프라 계층: 포트를 구현하는 HTTP 어댑터
+// 인프라 계층: RestClient로 상품 서비스를 호출하는 어댑터
 @Component
-public class ProductHttpClient implements ProductPort {
+public class ProductRestClient implements ProductPort {
 
-    /**
-     * 실제 환경에서는:
-     * return webClient.get()
-     *     .uri("/products/{id}", productId.getId())
-     *     .retrieve()
-     *     .bodyToMono(ProductInfo.class)
-     *     .blockOptional();
-     */
+    private final RestClient restClient;
+
+    public ProductRestClient(RestClient.Builder builder,
+                             @Value("${external.product.base-url}") String baseUrl) {
+        this.restClient = builder.baseUrl(baseUrl).build();
+    }
+
     @Override
     public Optional<ProductInfo> getProduct(ProductId productId) {
-        log.info("[External API] 상품 조회: productId={}", productId.getId());
+        ProductResponse response = restClient.get()
+                .uri("/products/{id}", productId.getId())
+                .retrieve()
+                .body(ProductResponse.class);
 
-        // Mock 데이터 (예시용)
-        return Optional.of(new ProductInfo(
-            productId,
-            "샘플 상품 " + productId.getId(),
-            10000L,
-            100,
-            true
-        ));
+        return Optional.ofNullable(response).map(this::toProductInfo);
     }
 
     @Override
     public boolean decreaseStock(ProductId productId, int quantity) {
-        log.info("[External API] 재고 차감: productId={}, quantity={}",
-                 productId.getId(), quantity);
+        restClient.post()
+                .uri("/products/{id}/stock/decrease", productId.getId())
+                .body(Map.of("quantity", quantity))
+                .retrieve()
+                .toBodilessEntity();
         return true;
     }
 }
 
-// ✅ 서비스에서 사용 (인터페이스에만 의존)
+// 서비스에서 사용 (인터페이스에만 의존)
 @Service
 public class OrderApplicationService {
 
-    private final ProductPort productPort;  // ✅ Port 사용
+    private final ProductPort productPort;
 
     private OrderItem createOrderItemFromExternalProduct(OrderItemRequest request) {
-        // ✅ 외부 도메인에서 정보 조회
         ProductPort.ProductInfo product = productPort.getProduct(ProductId.of(request.productId()))
             .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다"));
 
-        // ✅ 외부 모델을 내부 도메인 객체로 변환
+        // 외부 모델을 주문 도메인 객체로 변환
         return new OrderItem(
             product.productId(),
             product.productName(),
@@ -1457,7 +1459,7 @@ try {
     ↓ 의존
 도메인 계층 (Domain Service, Entity, Value Object)
     ↓ 의존
-인프라 계층 (Repository, Port Adapter - HttpClient)
+인프라 계층 (Repository, Port Adapter - RestClient)
 ```
 
 **핵심:** 각 계층은 바로 아래 계층만 의존해야 합니다!
@@ -1487,7 +1489,7 @@ try {
 @Autowired
 private ProductRepository productRepository;
 
-// ✅ 올바른 방법: Port(인터페이스)로 외부 도메인 통신 (인프라의 HTTP 어댑터가 구현)
+// ✅ 올바른 방법: Port(인터페이스)로 외부 도메인 통신 (인프라의 RestClient 어댑터가 구현)
 @Autowired
 private ProductPort productPort;
 ```
@@ -1500,7 +1502,7 @@ private ProductPort productPort;
 
 2. **Bounded Context 간 통신**
    - Repository는 자신의 도메인만
-   - 외부 도메인은 Port(인터페이스) + HTTP 어댑터 사용
+   - 외부 도메인은 Port(인터페이스) + RestClient 어댑터 사용
 
 3. **값 객체(Value Object) 활용**
    - Money, Quantity로 도메인 개념 표현

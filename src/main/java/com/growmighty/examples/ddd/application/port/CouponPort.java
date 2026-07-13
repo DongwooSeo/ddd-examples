@@ -6,42 +6,26 @@ import com.growmighty.examples.ddd.domain.vo.Money;
 import java.util.Optional;
 
 /**
- * 쿠폰 도메인 아웃바운드 포트 (Outbound Port)
+ * 쿠폰 서비스와 주고받는 창구.
  *
- * DDD / 헥사고날 아키텍처 원칙:
- * - 애플리케이션 계층에 포트(인터페이스)를 정의
- * - 외부 Bounded Context와의 통신을 위한 Anti-Corruption Layer
- * - 실제 통신 방식(HTTP, gRPC 등)은 인프라스트럭처 계층의 어댑터에서 구현
- *
- * 개선사항:
- * - 외부 쿠폰 도메인에서 할인 금액 계산을 담당
- * - 주문 도메인은 쿠폰 코드와 할인 금액만 관리
+ * 할인 금액 계산이나 쿠폰 유효성 판단은 쿠폰 도메인의 몫이라 여기서는 다루지 않는다.
+ * 실제 호출 방법(HTTP 등)은 인프라 계층 구현체가 정한다.
  */
 public interface CouponPort {
 
     /**
-     * 쿠폰 할인 금액 계산
-     *
-     * @param couponCode 쿠폰 코드
-     * @param orderAmount 주문 금액
-     * @return 할인 금액 (쿠폰이 유효하지 않으면 Optional.empty())
+     * 주문 금액에 쿠폰을 적용했을 때의 할인 금액을 쿠폰 서비스에 물어본다.
+     * 쓸 수 없는 쿠폰이면 빈 값을 돌려준다.
      */
     Optional<Money> calculateDiscount(CouponCode couponCode, Money orderAmount);
 
     /**
-     * 쿠폰 사용 처리
-     *
-     * @param couponCode 쿠폰 코드
-     * @param customerId 고객 ID
-     * @return 성공 여부
+     * 쿠폰을 사용 처리한다.
      */
     boolean useCoupon(CouponCode couponCode, String customerId);
 
     /**
-     * 쿠폰 복구
-     *
-     * @param couponCode 쿠폰 코드
-     * @return 성공 여부
+     * 사용한 쿠폰을 되돌린다. (주문 취소 등)
      */
     boolean restoreCoupon(CouponCode couponCode);
 }

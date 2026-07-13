@@ -7,72 +7,51 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 상품 도메인 아웃바운드 포트 (Outbound Port)
+ * 상품 서비스와 주고받는 창구.
  *
- * DDD / 헥사고날 아키텍처 원칙:
- * - 애플리케이션 계층에 포트(인터페이스)를 정의
- * - 외부 Bounded Context와의 통신을 위한 Anti-Corruption Layer
- * - 실제 통신 방식(HTTP, gRPC 등)은 인프라스트럭처 계층의 어댑터에서 구현
+ * 상품 정보와 재고는 상품 도메인이 관리한다. 주문 쪽은 조회하고 재고 변경을 요청할 뿐이다.
+ * 실제 호출 방법(HTTP 등)은 인프라 계층 구현체가 정한다.
  */
 public interface ProductPort {
 
     /**
-     * 상품 정보 조회
-     *
-     * @param productId 상품 ID
-     * @return 상품 정보 (없으면 Optional.empty())
+     * 상품 하나를 조회한다. 없으면 빈 값.
      */
     Optional<ProductInfo> getProduct(ProductId productId);
 
     /**
-     * 상품 정보 배치 조회
-     *
-     * @param productIds 상품 ID 목록
-     * @return 상품 ID별 정보 맵
+     * 여러 상품을 한 번에 조회한다.
      */
     Map<ProductId, ProductInfo> getProducts(List<ProductId> productIds);
 
     /**
-     * 재고 차감
-     *
-     * @param productId 상품 ID
-     * @param quantity 차감할 수량
-     * @return 성공 여부
+     * 재고를 차감한다.
      */
     boolean decreaseStock(ProductId productId, int quantity);
 
     /**
-     * 재고 복구
-     *
-     * @param productId 상품 ID
-     * @param quantity 복구할 수량
-     * @return 성공 여부
+     * 재고를 복구한다.
      */
     boolean restoreStock(ProductId productId, int quantity);
 
     /**
-     * 재고 차감 (배치 처리)
-     *
-     * @param stockDecreaseMap 상품별 차감 수량 맵
-     * @return 전체 성공 여부
+     * 여러 상품의 재고를 한 번에 차감한다.
      */
     boolean decreaseStocks(Map<ProductId, Integer> stockDecreaseMap);
 
     /**
-     * 재고 복구 (배치 처리)
-     *
-     * @param stockRestoreMap 상품별 복구 수량 맵
+     * 여러 상품의 재고를 한 번에 복구한다.
      */
     void restoreStocks(Map<ProductId, Integer> stockRestoreMap);
 
     /**
-     * 상품 정보 도메인 모델
+     * 주문을 만드는 데 필요한 만큼만 추린 상품 정보.
      */
     record ProductInfo(
-        ProductId productId,
-        String productName,
-        long price,
-        int stockQuantity,
-        boolean available
+            ProductId productId,
+            String productName,
+            long price,
+            int stockQuantity,
+            boolean available
     ) {}
 }

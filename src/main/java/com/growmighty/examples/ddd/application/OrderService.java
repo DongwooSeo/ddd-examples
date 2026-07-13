@@ -1,31 +1,21 @@
 package com.growmighty.examples.ddd.application;
 
-// ========== Command (입력) ==========
-
 import com.growmighty.examples.ddd.application.command.CancelOrderCommand;
 import com.growmighty.examples.ddd.application.command.CreateOrderCommand;
 import com.growmighty.examples.ddd.application.command.OrderItemCommand;
 import com.growmighty.examples.ddd.application.command.PayOrderCommand;
-
-// ========== Application Layer DTOs ==========
 import com.growmighty.examples.ddd.application.dto.OrderResult;
 import com.growmighty.examples.ddd.application.dto.PriorityResult;
 import com.growmighty.examples.ddd.application.dto.DiscountResult;
-
-// ========== Domain ==========
+import com.growmighty.examples.ddd.application.port.ProductPort;
+import com.growmighty.examples.ddd.application.port.CustomerPort;
+import com.growmighty.examples.ddd.application.port.CouponPort;
 import com.growmighty.examples.ddd.domain.entity.Order;
 import com.growmighty.examples.ddd.domain.entity.OrderItem;
 import com.growmighty.examples.ddd.domain.repository.OrderRepository;
 import com.growmighty.examples.ddd.domain.service.OrderDomainService;
 import com.growmighty.examples.ddd.domain.vo.*;
 import com.growmighty.examples.ddd.domain.vo.OrderPriority;
-
-// ========== Application Ports (Outbound) ==========
-import com.growmighty.examples.ddd.application.port.ProductPort;
-import com.growmighty.examples.ddd.application.port.CustomerPort;
-import com.growmighty.examples.ddd.application.port.CouponPort;
-
-// ========== Framework ==========
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,18 +26,10 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * 애플리케이션 서비스
- * <p>
- * 역할:
- * 1. 트랜잭션 관리
- * 2. 도메인 객체 조율
- * 3. 인프라스트럭처 레이어와 연동
- * 4. DTO 변환
- * <p>
- * 특징:
- * - 비즈니스 로직은 도메인 모델에 위임
- * - 얇은 서비스 레이어 (Thin Service Layer)
- * - 도메인 이벤트는 자동으로 발행됨
+ * 주문 유스케이스를 조율한다.
+ *
+ * 트랜잭션을 잡고, 도메인 객체를 불러 흐름을 엮고, 외부 서비스는 포트로 호출한다.
+ * 실제 규칙은 도메인 모델이 갖고 있으므로 이 클래스는 얇게 유지한다.
  */
 @Slf4j
 @Service
@@ -130,15 +112,12 @@ public class OrderService {
     private void applyCoupon(Order order, String couponCodeStr) {
         CouponCode couponCode = CouponCode.of(couponCodeStr);
 
-        // 외부 쿠폰 도메인에서 할인 금액 계산
+        // 할인 금액은 쿠폰 서비스가 계산해 준다.
         Money orderAmount = order.calculateTotalAmount();
         Money discountAmount = couponPort.calculateDiscount(couponCode, orderAmount)
                 .orElseThrow(() -> new IllegalArgumentException("유효하지 않은 쿠폰입니다"));
 
-        // 주문에 쿠폰 적용
         order.applyCoupon(couponCode, discountAmount);
-
-        // 외부 쿠폰 도메인에 사용 처리 요청
         couponPort.useCoupon(couponCode, order.getCustomerId().getId().toString());
     }
 
@@ -202,16 +181,12 @@ public class OrderService {
         return OrderResult.from(order);
     }
 
-    /**
-     * 주문 우선순위 조회 (도메인 서비스 활용)
-     */
     public PriorityResult getOrderPriority(Long orderId) {
         log.info("주문 우선순위 조회: orderId={}", orderId);
 
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new IllegalArgumentException("주문을 찾을 수 없습니다"));
 
-        // 도메인 서비스를 통한 우선순위 계산
         OrderPriority priority = orderDomainService.determinePriority(
                 order.calculateTotalAmount()
         );
@@ -223,19 +198,14 @@ public class OrderService {
         );
     }
 
-    /**
-     * 주문 할인 계산 (도메인 서비스 활용)
-     */
     public DiscountResult calculateDiscount(Long orderId) {
         log.info("주문 할인 계산: orderId={}", orderId);
 
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new IllegalArgumentException("주문을 찾을 수 없습니다"));
 
-        // 고객의 주문 이력 조회
         List<Order> customerOrderHistory = orderRepository.findByCustomerId(order.getCustomerId());
 
-        // 도메인 서비스를 통한 할인 계산
         Money discountAmount = orderDomainService.calculateDiscount(
                 order.getCustomerId(),
                 order.calculateTotalAmount(),
