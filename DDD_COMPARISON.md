@@ -319,10 +319,10 @@ public class OrderApplicationService {
     // ✅ 레포지토리는 자신의 도메인만
     private final OrderRepository orderRepository;
     
-    // ✅ 외부 도메인은 Client로 통신
-    private final ProductClient productClient;
-    private final CustomerClient customerClient;
-    private final CouponClient couponClient;
+    // ✅ 외부 도메인은 Port(인터페이스)로 통신
+    private final ProductPort productPort;
+    private final CustomerPort customerPort;
+    private final CouponPort couponPort;
     
     @Transactional
     public Long createOrder(CreateOrderCommand command) {
@@ -351,7 +351,7 @@ public class OrderApplicationService {
     
     // ✅ 외부 도메인 통신은 명확히 분리
     private void validateCustomer(CustomerId customerId) {
-        boolean canOrder = customerClient.canOrder(customerId.getId());
+        boolean canOrder = customerPort.canOrder(customerId);
         if (!canOrder) {
             throw new IllegalStateException("주문할 수 없는 고객입니다");
         }
@@ -399,56 +399,65 @@ public class OrderService {
 - 마이크로서비스로 분리 불가능
 - 도메인 간 강한 결합
 
-#### ✅ After: Anti-Corruption Layer (WebClient)
+#### ✅ After: Anti-Corruption Layer (Port + Adapter)
 
 ```java
-// ✅ 외부 도메인 클라이언트
+// ✅ 애플리케이션 계층: 아웃바운드 포트(인터페이스)
+public interface ProductPort {
+    Optional<ProductInfo> getProduct(ProductId productId);
+    boolean decreaseStock(ProductId productId, int quantity);
+}
+
+// ✅ 인프라 계층: 포트를 구현하는 HTTP 어댑터
 @Component
-public class ProductClient {
-    
+public class ProductHttpClient implements ProductPort {
+
     /**
      * 실제 환경에서는:
      * return webClient.get()
-     *     .uri("/products/{id}", productId)
+     *     .uri("/products/{id}", productId.getId())
      *     .retrieve()
-     *     .bodyToMono(ProductDTO.class)
-     *     .block();
+     *     .bodyToMono(ProductInfo.class)
+     *     .blockOptional();
      */
-    public ProductDTO getProduct(Long productId) {
-        log.info("[External API] 상품 조회: productId={}", productId);
-        
+    @Override
+    public Optional<ProductInfo> getProduct(ProductId productId) {
+        log.info("[External API] 상품 조회: productId={}", productId.getId());
+
         // Mock 데이터 (예시용)
-        return new ProductDTO(
+        return Optional.of(new ProductInfo(
             productId,
-            "샘플 상품 " + productId,
-            BigDecimal.valueOf(10000),
+            "샘플 상품 " + productId.getId(),
+            10000L,
             100,
             true
-        );
+        ));
     }
-    
-    public boolean decreaseStock(Long productId, int quantity) {
-        log.info("[External API] 재고 차감: productId={}, quantity={}", 
-                 productId, quantity);
+
+    @Override
+    public boolean decreaseStock(ProductId productId, int quantity) {
+        log.info("[External API] 재고 차감: productId={}, quantity={}",
+                 productId.getId(), quantity);
         return true;
     }
 }
 
-// ✅ 서비스에서 사용
+// ✅ 서비스에서 사용 (인터페이스에만 의존)
 @Service
 public class OrderApplicationService {
-    
-    private final ProductClient productClient;  // ✅ Client 사용
-    
+
+    private final ProductPort productPort;  // ✅ Port 사용
+
     private OrderItem createOrderItemFromExternalProduct(OrderItemRequest request) {
         // ✅ 외부 도메인에서 정보 조회
-        ProductDTO product = productClient.getProduct(request.productId());
-        
-        // ✅ 외부 DTO를 내부 도메인 객체로 변환
+        ProductPort.ProductInfo product = productPort.getProduct(ProductId.of(request.productId()))
+            .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다"));
+
+        // ✅ 외부 모델을 내부 도메인 객체로 변환
         return new OrderItem(
-            ProductId.of(product.getProductId()),
-            product.getProductName(),
-            Money.of(product.getPrice()),
+            product.productId(),
+            product.productName(),
+            Money.of(product.price()),
             Quantity.of(request.quantity())
         );
     }
@@ -472,10 +481,10 @@ public class OrderApplicationService {
 │  │  - Money, Quantity             │     │
 │  └────────────────────────────────┘     │
 │                                          │
-│  외부 통신:                               │
-│  ├─ ProductClient    (WebClient)        │
-│  ├─ CustomerClient   (WebClient)        │
-│  └─ CouponClient     (WebClient)        │
+│  외부 통신 (Port → HTTP Adapter):         │
+│  ├─ ProductPort   → ProductHttpClient   │
+│  ├─ CustomerPort  → CustomerHttpClient  │
+│  └─ CouponPort    → CouponHttpClient    │
 └─────────────────────────────────────────┘
          │ HTTP/gRPC
          ├────────────────────────────────┐

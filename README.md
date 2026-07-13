@@ -45,10 +45,10 @@ ddd-examples/
     │   ├── dto/                   # Response 객체 (출력)
     │   │   ├── OrderDetailResponse.java
     │   │   └── OrderItemResponse.java
-    │   └── service/               # 외부 도메인 클라이언트
-    │       ├── ProductClient.java
-    │       ├── CustomerClient.java
-    │       └── CouponClient.java
+    │   └── port/                  # 아웃바운드 포트 (외부 도메인 통신 인터페이스)
+    │       ├── ProductPort.java
+    │       ├── CustomerPort.java
+    │       └── CouponPort.java
     │
     ├── domain/                    # 도메인 레이어 (핵심)
     │   ├── entity/                # 엔티티
@@ -73,14 +73,14 @@ ddd-examples/
     │       └── OrderRepository.java
     │
     └── infrastructure/            # 인프라 레이어
-        └── external/              # 외부 도메인 통신
+        └── external/              # 외부 도메인 통신 (포트 어댑터)
+            ├── CouponHttpClient.java         # CouponPort HTTP 어댑터
+            ├── CustomerHttpClient.java       # CustomerPort HTTP 어댑터
+            ├── ProductHttpClient.java        # ProductPort HTTP 어댑터
             └── dto/               # 외부 도메인 DTO
                 ├── ProductDTO.java
                 ├── CustomerDTO.java
                 └── CouponDTO.java
-            ├── CouponClientImpl.java         # 외부 도메인 호출 모듈
-            ├── CustomerClientImpl.java       # 외부 도메인 호출 모듈
-            └── ProductClientImpl.java        # 외부 도메인 호출 모듈
 ```
 
 ## 🔑 핵심 DDD 패턴
@@ -120,11 +120,17 @@ public class Money {
 ### 3. Anti-Corruption Layer
 
 ```java
-// 외부 도메인과의 통신을 캡슐화
+// 애플리케이션 계층: 아웃바운드 포트(인터페이스)
+public interface ProductPort {
+    Optional<ProductInfo> getProduct(ProductId productId);
+}
+
+// 인프라 계층: 외부 도메인과의 통신을 캡슐화한 HTTP 어댑터
 @Component
-public class ProductClient {
-    
-    public ProductDTO getProduct(Long productId) {
+public class ProductHttpClient implements ProductPort {
+
+    @Override
+    public Optional<ProductInfo> getProduct(ProductId productId) {
         // WebClient로 외부 서비스 호출
         // 주문 도메인을 외부 변경으로부터 보호
         return /* 외부 API 호출 결과 */;
@@ -219,7 +225,7 @@ public class GlobalExceptionHandler {
 | Order 클래스 | 48줄 (getter/setter만) | 267줄 (로직 포함) |
 | OrderService | 256줄 (복잡) | 264줄 (조율만) |
 | 테스트 용이성 | ❌ 어려움 (DB 의존) | ✅ 쉬움 (순수 도메인) |
-| 외부 도메인 통신 | ❌ Repository 직접 접근 | ✅ WebClient (ACL) |
+| 외부 도메인 통신 | ❌ Repository 직접 접근 | ✅ Port + Adapter (ACL) |
 | 도메인 이벤트 | ❌ 없음 | ✅ 느슨한 결합 |
 
 ## 🚀 실행 방법
@@ -253,16 +259,17 @@ public class GlobalExceptionHandler {
 │  │  - Value Objects (Money, Quantity, etc)    │         │
 │  └────────────────────────────────────────────┘         │
 │                                                         │
-│  외부 도메인과의 통신:                                       │
-│  - ProductClient (상품 도메인)                             │
-│  - CustomerClient (고객 도메인)                            │
-│  - CouponClient (쿠폰 도메인)                              │
+│  외부 도메인과의 통신 (Outbound Port):                      │
+│  - ProductPort (상품 도메인)                              │
+│  - CustomerPort (고객 도메인)                             │
+│  - CouponPort (쿠폰 도메인)                               │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ### Anti-Corruption Layer (부패 방지 계층)
 
-외부 도메인과 통신할 때 **WebClient 기반 클라이언트**를 사용하여:
+외부 도메인과 통신할 때 **포트(Port) 인터페이스와 인프라 어댑터**를 사용하여:
+- 애플리케이션 계층에는 포트(인터페이스)만 두고, 인프라 계층에서 어댑터로 구현
 - 주문 도메인을 외부 변경으로부터 보호
 - 외부 도메인의 DTO를 주문 도메인 객체로 변환
 - 마이크로서비스 아키텍처에서의 도메인 간 통신 패턴
@@ -272,9 +279,9 @@ public class GlobalExceptionHandler {
 @Autowired
 private ProductRepository productRepository; // 다른 도메인의 Repository
 
-// ✅ WebClient로 다른 도메인 접근 (올바른 예)
+// ✅ Port(인터페이스)로 다른 도메인 접근 (올바른 예)
 @Autowired
-private ProductClient productClient; // Anti-Corruption Layer
+private ProductPort productPort; // Anti-Corruption Layer (인프라의 HTTP 어댑터가 구현)
 ```
 
 ### 주문 프로세스 흐름
@@ -285,12 +292,12 @@ Client
   │
   ├─> OrderApplicationService.createOrder()
   │     │
-  │     ├─> CustomerClient.canOrder()              [외부 도메인 호출]
-  │     ├─> ProductClient.getProduct()             [외부 도메인 호출]
+  │     ├─> CustomerPort.canOrder()                [외부 도메인 호출]
+  │     ├─> ProductPort.getProducts()              [외부 도메인 호출]
   │     ├─> Order.create()                         [도메인 로직]
-  │     ├─> CouponClient.getCoupon()               [외부 도메인 호출]
+  │     ├─> CouponPort.calculateDiscount()         [외부 도메인 호출]
   │     ├─> Order.applyCoupon()                    [도메인 로직]
-  │     ├─> ProductClient.decreaseStock()          [외부 도메인 호출]
+  │     ├─> ProductPort.decreaseStocks()           [외부 도메인 호출]
   │     └─> OrderRepository.save()                 [영속화]
   │
   └─> Order Created (orderId 반환)
@@ -304,8 +311,8 @@ Client
   │     │
   │     ├─> OrderRepository.findById()             [조회]
   │     ├─> Order.cancel()                         [도메인 로직 + 검증]
-  │     ├─> ProductClient.restoreStock()           [외부 도메인 호출]
-  │     └─> CouponClient.restoreCoupon()           [외부 도메인 호출]
+  │     ├─> ProductPort.restoreStocks()            [외부 도메인 호출]
+  │     └─> CouponPort.restoreCoupon()             [외부 도메인 호출]
   │
   └─> Order Cancelled
 ```
@@ -487,10 +494,10 @@ public class OrderApplicationService {
     // ✅ 레포지토리는 자신의 도메인만
     private final OrderRepository orderRepository;
     
-    // ✅ 외부 도메인은 Client로 통신
-    private final ProductClient productClient;
-    private final CustomerClient customerClient;
-    private final CouponClient couponClient;
+    // ✅ 외부 도메인은 Port(인터페이스)로 통신
+    private final ProductPort productPort;
+    private final CustomerPort customerPort;
+    private final CouponPort couponPort;
     
     @Transactional
     public Long createOrder(CreateOrderCommand command) {
@@ -519,7 +526,7 @@ public class OrderApplicationService {
     
     // ✅ 외부 도메인 통신은 명확히 분리
     private void validateCustomer(CustomerId customerId) {
-        boolean canOrder = customerClient.canOrder(customerId.getId());
+        boolean canOrder = customerPort.canOrder(customerId);
         if (!canOrder) {
             throw new IllegalStateException("주문할 수 없는 고객입니다");
         }
@@ -557,56 +564,65 @@ public class OrderService {
 - 마이크로서비스로 분리 불가능
 - 도메인 간 강한 결합
 
-#### ✅ After: Anti-Corruption Layer (WebClient)
+#### ✅ After: Anti-Corruption Layer (Port + Adapter)
 
 ```java
-// ✅ 외부 도메인 클라이언트
+// ✅ 애플리케이션 계층: 아웃바운드 포트(인터페이스)
+public interface ProductPort {
+    Optional<ProductInfo> getProduct(ProductId productId);
+    boolean decreaseStock(ProductId productId, int quantity);
+}
+
+// ✅ 인프라 계층: 포트를 구현하는 HTTP 어댑터
 @Component
-public class ProductClient {
-    
+public class ProductHttpClient implements ProductPort {
+
     /**
      * 실제 환경에서는:
      * return webClient.get()
-     *     .uri("/products/{id}", productId)
+     *     .uri("/products/{id}", productId.getId())
      *     .retrieve()
-     *     .bodyToMono(ProductDTO.class)
-     *     .block();
+     *     .bodyToMono(ProductInfo.class)
+     *     .blockOptional();
      */
-    public ProductDTO getProduct(Long productId) {
-        log.info("[External API] 상품 조회: productId={}", productId);
-        
+    @Override
+    public Optional<ProductInfo> getProduct(ProductId productId) {
+        log.info("[External API] 상품 조회: productId={}", productId.getId());
+
         // Mock 데이터 (예시용)
-        return new ProductDTO(
+        return Optional.of(new ProductInfo(
             productId,
-            "샘플 상품 " + productId,
-            BigDecimal.valueOf(10000),
+            "샘플 상품 " + productId.getId(),
+            10000L,
             100,
             true
-        );
+        ));
     }
-    
-    public boolean decreaseStock(Long productId, int quantity) {
-        log.info("[External API] 재고 차감: productId={}, quantity={}", 
-                 productId, quantity);
+
+    @Override
+    public boolean decreaseStock(ProductId productId, int quantity) {
+        log.info("[External API] 재고 차감: productId={}, quantity={}",
+                 productId.getId(), quantity);
         return true;
     }
 }
 
-// ✅ 서비스에서 사용
+// ✅ 서비스에서 사용 (인터페이스에만 의존)
 @Service
 public class OrderApplicationService {
-    
-    private final ProductClient productClient;  // ✅ Client 사용
-    
+
+    private final ProductPort productPort;  // ✅ Port 사용
+
     private OrderItem createOrderItemFromExternalProduct(OrderItemRequest request) {
         // ✅ 외부 도메인에서 정보 조회
-        ProductDTO product = productClient.getProduct(request.productId());
-        
-        // ✅ 외부 DTO를 내부 도메인 객체로 변환
+        ProductPort.ProductInfo product = productPort.getProduct(ProductId.of(request.productId()))
+            .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다"));
+
+        // ✅ 외부 모델을 내부 도메인 객체로 변환
         return new OrderItem(
-            ProductId.of(product.getProductId()),
-            product.getProductName(),
-            Money.of(product.getPrice()),
+            product.productId(),
+            product.productName(),
+            Money.of(product.price()),
             Quantity.of(request.quantity())
         );
     }
@@ -1441,7 +1457,7 @@ try {
     ↓ 의존
 도메인 계층 (Domain Service, Entity, Value Object)
     ↓ 의존
-인프라 계층 (Repository, External Client)
+인프라 계층 (Repository, Port Adapter - HttpClient)
 ```
 
 **핵심:** 각 계층은 바로 아래 계층만 의존해야 합니다!
@@ -1456,7 +1472,7 @@ try {
 │  - Order (우리 도메인)           │
 │  - OrderItem                    │
 └─────────────────────────────────┘
-         │ WebClient
+         │ Port → HTTP Adapter
          ▼
 ┌─────────────────────────────────┐
 │      상품 Bounded Context        │
@@ -1471,9 +1487,9 @@ try {
 @Autowired
 private ProductRepository productRepository;
 
-// ✅ 올바른 방법: Client로 외부 도메인 통신
+// ✅ 올바른 방법: Port(인터페이스)로 외부 도메인 통신 (인프라의 HTTP 어댑터가 구현)
 @Autowired
-private ProductClient productClient;
+private ProductPort productPort;
 ```
 
 ## 🎯 주요 학습 포인트
@@ -1484,7 +1500,7 @@ private ProductClient productClient;
 
 2. **Bounded Context 간 통신**
    - Repository는 자신의 도메인만
-   - 외부 도메인은 WebClient 사용
+   - 외부 도메인은 Port(인터페이스) + HTTP 어댑터 사용
 
 3. **값 객체(Value Object) 활용**
    - Money, Quantity로 도메인 개념 표현

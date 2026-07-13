@@ -20,10 +20,10 @@ import com.growmighty.examples.ddd.domain.service.OrderDomainService;
 import com.growmighty.examples.ddd.domain.vo.*;
 import com.growmighty.examples.ddd.domain.vo.OrderPriority;
 
-// ========== Application Services ==========
-import com.growmighty.examples.ddd.application.service.ProductClient;
-import com.growmighty.examples.ddd.application.service.CustomerClient;
-import com.growmighty.examples.ddd.application.service.CouponClient;
+// ========== Application Ports (Outbound) ==========
+import com.growmighty.examples.ddd.application.port.ProductPort;
+import com.growmighty.examples.ddd.application.port.CustomerPort;
+import com.growmighty.examples.ddd.application.port.CouponPort;
 
 // ========== Framework ==========
 import lombok.RequiredArgsConstructor;
@@ -56,9 +56,9 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final OrderDomainService orderDomainService;
 
-    private final ProductClient productClient;
-    private final CustomerClient customerClient;
-    private final CouponClient couponClient;
+    private final ProductPort productPort;
+    private final CustomerPort customerPort;
+    private final CouponPort couponPort;
 
     @Transactional
     public Long createOrder(CreateOrderCommand command) {
@@ -84,7 +84,7 @@ public class OrderService {
     }
 
     private void validateCustomer(CustomerId customerId) {
-        if (!customerClient.canOrder(customerId)) {
+        if (!customerPort.canOrder(customerId)) {
             throw new IllegalStateException("주문할 수 없는 고객입니다");
         }
     }
@@ -95,7 +95,7 @@ public class OrderService {
                 .distinct()
                 .toList();
 
-        Map<ProductId, ProductClient.ProductInfo> productMap = productClient.getProducts(productIds);
+        Map<ProductId, ProductPort.ProductInfo> productMap = productPort.getProducts(productIds);
 
         return itemRequests.stream()
                 .map(request -> createOrderItem(request, productMap))
@@ -103,9 +103,9 @@ public class OrderService {
     }
 
     private OrderItem createOrderItem(OrderItemCommand request,
-                                      Map<ProductId, ProductClient.ProductInfo> productMap) {
+                                      Map<ProductId, ProductPort.ProductInfo> productMap) {
         ProductId productId = ProductId.of(request.productId());
-        ProductClient.ProductInfo product = productMap.get(productId);
+        ProductPort.ProductInfo product = productMap.get(productId);
 
         if (product == null) {
             throw new IllegalArgumentException("상품을 찾을 수 없습니다: " + request.productId());
@@ -132,14 +132,14 @@ public class OrderService {
 
         // 외부 쿠폰 도메인에서 할인 금액 계산
         Money orderAmount = order.calculateTotalAmount();
-        Money discountAmount = couponClient.calculateDiscount(couponCode, orderAmount)
+        Money discountAmount = couponPort.calculateDiscount(couponCode, orderAmount)
                 .orElseThrow(() -> new IllegalArgumentException("유효하지 않은 쿠폰입니다"));
 
         // 주문에 쿠폰 적용
         order.applyCoupon(couponCode, discountAmount);
 
         // 외부 쿠폰 도메인에 사용 처리 요청
-        couponClient.useCoupon(couponCode, order.getCustomerId().getId().toString());
+        couponPort.useCoupon(couponCode, order.getCustomerId().getId().toString());
     }
 
     private void decreaseStocks(List<OrderItem> orderItems) {
@@ -149,7 +149,7 @@ public class OrderService {
                         Collectors.summingInt(item -> item.getQuantity().getValue())
                 ));
 
-        if (!productClient.decreaseStocks(stockDecreaseMap)) {
+        if (!productPort.decreaseStocks(stockDecreaseMap)) {
             throw new IllegalStateException("재고 차감 실패: 일부 상품의 재고가 부족합니다");
         }
     }
@@ -179,7 +179,7 @@ public class OrderService {
         restoreStocks(order);
 
         if (order.getCouponCode() != null) {
-            couponClient.restoreCoupon(order.getCouponCode());
+            couponPort.restoreCoupon(order.getCouponCode());
         }
 
         log.info("주문 취소 완료: orderId={}", command.orderId());
@@ -192,7 +192,7 @@ public class OrderService {
                         Collectors.summingInt(item -> item.getQuantity().getValue())
                 ));
 
-        productClient.restoreStocks(stockRestoreMap);
+        productPort.restoreStocks(stockRestoreMap);
     }
 
     public OrderResult getOrder(Long orderId) {
